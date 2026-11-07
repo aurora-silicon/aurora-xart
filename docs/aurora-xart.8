@@ -1,0 +1,157 @@
+.\" SPDX-License-Identifier: MIT
+.TH AURORA-XART 8 2026-11-07 "aurora-xart 0.1.0" "Aurora Linux"
+.SH NAME
+aurora-xart \- inspect and manage Linux's Secure Enclave and xART state
+.SH SYNOPSIS
+.B aurora-xart
+.RB [ \-\-root
+.IR DIR ]
+.B status
+.RB [ \-\-json ]
+.br
+.B aurora-xart
+.RB [ \-\-root
+.IR DIR ]
+.B list
+.RB [ \-\-json ]
+.br
+.B aurora-xart
+.RB [ \-\-root
+.IR DIR ]
+.B reset-touchid
+.RB [ \-\-yes ]
+.RB [ \-\-force ]
+.SH DESCRIPTION
+The Secure Enclave of an Apple silicon Mac keeps its anti-replay state in
+xART, a store on the iBoot system container that every operating system on
+the Mac shares.
+On Aurora Linux the
+.B apple_sep
+driver keeps Linux's own Secure Enclave state in
+.IR /var/lib :
+the Touch ID identity keybag slot, the catacombs, the machine ref-key, and
+the xART guard's list of the session records the enclave created while Linux
+ran.
+.PP
+.B aurora-xart
+reads that state and the driver's diagnostics, explains in plain words what is
+wrong and what to do, and can move the Touch ID state aside to start Touch ID
+over.
+It is the Linux counterpart of
+.B xartutil
+on macOS, limited to what Linux can do safely: it never talks to the enclave,
+never writes xART and never deletes a file.
+.SH COMMANDS
+.TP
+.B status
+Shows the platform and the SEP profile the driver uses, the driver's
+diagnostics from
+.IR /sys/bus/platform/devices/*.sep/diag ,
+the effective xART guard level, the module parameters with where each value
+comes from, whether this is a read-only install, the keybag slot and the
+guard list.
+It then explains any stuck state, for example an earlier keybag create that
+never finished, and says what to run.
+With no command,
+.B aurora-xart
+runs
+.BR status .
+.TP
+.B list
+Lists the session records on Linux's xART guard list (kind and session id,
+never key material), torn and repeated entries, the one-time allowance, the
+saved previous values (kind, session id and length only), the keybag slot
+with its state and provenance, and which state files, prints and calibration
+files exist.
+.TP
+.B reset-touchid
+Starts Touch ID over on a Mac whose keybag is stuck or no longer loads.
+It refuses on a read-only install, when the driver is not running, when xART
+writes are disabled this boot, and when the keybag works (unless
+.BR \-\-force ).
+If Touch ID has not been activated this boot, it opens the sensor once
+through
+.B fprintd-list
+first, since only that loads the keybag.
+It says what is lost, asks you to type RESET (unless
+.BR \-\-yes ),
+masks fprintd until the next boot, and moves each user's
+.I /var/lib/fprint/<user>/apple-sep
+and the Touch ID state files into a new
+.IR /var/lib/aurora-sep-touchid-reset-<time>/ ,
+the keybag last.
+If a move fails, everything already moved is put back.
+It keeps the xART guard's files, the Touch ID calibration and the Touch ID
+lockout record.
+Reboot afterwards: the driver creates a new keybag during boot, and every
+finger is enrolled again.
+The old keybag, if the enclave has one, stays there unused.
+.SH OPTIONS
+.TP
+.BI \-\-root " DIR"
+Works on the files under
+.IR DIR ,
+laid out as on a Mac
+.RI ( proc/device-tree ,
+.IR sys ,
+.IR etc ,
+.IR var/lib ),
+instead of this system.
+Paths are printed relative to it, and this system's services are left alone.
+.TP
+.B \-\-json
+Prints the result as JSON for scripts.
+.TP
+.B \-\-yes
+Does not ask for RESET.
+.TP
+.B \-\-force
+Resets a keybag that works.
+.TP
+.B \-\-version
+Prints the version.
+.SH EXIT STATUS
+.TP
+.B 0
+Nothing wrong was found, or the command did what it was asked.
+.TP
+.B 1
+.B status
+or
+.B list
+found a problem that needs action.
+.TP
+.B 2
+The command refused, or the command line was wrong.
+.SH FILES
+.TP
+.I /var/lib/aurora-sep-keybag.bin
+The identity keybag slot: committed, an unfinished create (intent) or a
+refused create.
+.TP
+.I /var/lib/aurora-sep-xart-owned.bin
+The xART guard's list of the session records Linux created.
+.TP
+.I /var/lib/aurora-sep-xart-allow-once.bin
+A one-time allowance for a boot policy change.
+.TP
+.I /var/lib/aurora-sep-xart-policy-previous.bin
+Saved previous values of records a window or allowance let the enclave
+rewrite.
+.TP
+.I /etc/modprobe.d/aurora-sep.conf
+A read-only install's settings
+.RB ( "xart_writes=0 provision_keybag=0" ).
+.SH NOTES
+Reading the state files needs root; the diagnostics and the configuration do
+not.
+.PP
+There is no backup or restore: the enclave's state is anti-replay protected,
+so saved Linux-side state cannot be put back into use.
+The file formats follow aurora-silicon/linux at commit a20af80f9233, as set
+out in
+.IR /usr/share/doc/aurora-xart/FORMATS.md .
+The xART guard and its recovery are described in aurora-sep's XART-SAFETY.md.
+.SH SEE ALSO
+.BR fprintd (8),
+.BR modprobe.d (5)
