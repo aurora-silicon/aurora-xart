@@ -63,7 +63,9 @@ class State:
     diag: system.Diag
     module_loaded: bool
     params: dict[str, system.Param]
-    read_only: tuple[bool, str | None]
+    # Why the running driver reports xART writes disabled, or None.
+    writes_disabled: str | None
+    obsolete: list[tuple[str, str, str]]
     guard: Guard
     keybag_file: system.FileRead
     keybag: formats.KeybagSlot | None
@@ -126,11 +128,23 @@ def _int(value: str | None) -> int | None:
         return None
 
 
+def writes_disabled(diag: system.Diag) -> str | None:
+    """Why the running driver reports xART writes disabled, or None. Only the
+    driver's own report counts: since aurora-silicon/linux#2591 no parameter
+    turns writes off, and a stale one in the configuration is ignored."""
+    if diag.get("xart") == "disabled":
+        return "diag/xart reads disabled"
+    if diag.policy().get("xart_writes") == "0":
+        return "diag/policy reads xart_writes=0"
+    return None
+
+
 def inspect(root: Root) -> State:
     compatible = root.compatible()
     profile = platform.select(compatible)
     diag = root.diag()
     params = root.params()
+    disabled = writes_disabled(diag)
 
     level = _int(diag.get("xart_guard"))
     if level is not None:
@@ -139,7 +153,7 @@ def inspect(root: Root) -> State:
     else:
         level = platform.guard_level(params["xart_guard"].value,
                                      profile.guard_default if profile else 0)
-        if params["xart_writes"].value == 0 or diag.get("xart") == "disabled":
+        if disabled:
             level = 0
         guard = Guard(level, "configuration")
 
@@ -169,7 +183,7 @@ def inspect(root: Root) -> State:
     state = State(
         root=root, model=root.model(), compatible=compatible, chip=platform.chip(compatible),
         profile=profile, diag=diag, module_loaded=root.module_loaded(), params=params,
-        read_only=root.read_only_install(), guard=guard,
+        writes_disabled=disabled, obsolete=root.obsolete_options(), guard=guard,
         keybag_file=keybag_file, keybag=keybag, list_file=list_file, guard_list=guard_list,
         allow_file=allow_file, allowance=allowance, allowance_problem=allowance_problem,
         previous_file=previous_file, previous=previous, previous_leftover=leftover,
@@ -200,7 +214,7 @@ def _stuck_reason(state: State) -> str:
         param = state.params["xart_guard"]
         if param.value == 0:
             why = f"xart_guard=0 is set ({param.source})"
-        elif state.params["xart_writes"].value == 0 or state.diag.get("xart") == "disabled":
+        elif state.writes_disabled:
             why = "xART writes are disabled"
         elif state.profile in (platform.T8103, platform.T6000):
             why = "xart_guard defaults to 0 on M1 Macs since linux#1049"
@@ -274,8 +288,10 @@ def diagnose(state: State) -> list[Finding]:
     elif kf.error == "missing":
         if d.get("keybag") == "missing" or not state.driver_running:
             note = ""
-            if state.params["provision_keybag"].value == 0:
-                note = " provision_keybag=0, so the driver does not create one."
+            if d.policy().get("provision_keybag") == "0":
+                note = (" The running kernel predates aurora-silicon/linux#2591 and reports "
+                        "provision_keybag=0 (diag/policy), so it does not create one; a "
+                        "current kernel always creates a missing keybag at boot.")
             out.append(Finding("info", "keybag-none",
                                "No identity keybag is stored yet: Touch ID is not set up." + note))
     elif kb is not None:
@@ -330,11 +346,19 @@ def diagnose(state: State) -> list[Finding]:
                                "the keybag state as ambiguous (EINVAL) and does not create "
                                "another.", RESET_HINT))
 
-    if (d.get("touchid") == "failed" and d.get("keybag") == "missing"
-            and (d.get("xart") == "disabled" or state.read_only[0])):
-        out.append(Finding("info", "not-provisioned",
-                           "Touch ID reads failed because this is a read-only install: no "
-                           "keybag was provisioned. That is not a fault."))
+    if state.writes_disabled:
+        out.append(Finding("warn", "xart-writes-disabled",
+                           "xART writes are disabled: the store is read-only this boot "
+                           f"({state.writes_disabled}), so Touch ID enrol and verify are "
+                           "refused and no keybag is created. Since aurora-silicon/linux#2591 "
+                           "that happens only in the key-store-only initrd phase, before "
+                           "complete_attach, or after a failed writable reopen; an older "
+                           "kernel also does it for a leftover xart_writes=0.",
+                           "Check `journalctl -b -k | grep apple_sep`."))
+        if d.get("touchid") == "failed" and d.get("keybag") == "missing":
+            out.append(Finding("info", "not-provisioned",
+                               "Touch ID reads failed because no keybag was provisioned: "
+                               "xART writes are disabled this boot."))
 
     # The xART guard.
     g = state.guard
@@ -380,15 +404,34 @@ def diagnose(state: State) -> list[Finding]:
         out.append(Finding("warn", "allowance-damaged",
                            f"The one-time allowance file is {state.allowance_problem}."))
 
-    if state.read_only[0]:
-        out.append(Finding("info", "read-only",
-                           f"Read-only install: {state.read_only[1]}. The driver attaches and "
-                           "reports but creates no keybag."))
+    if state.obsolete:
+        found = "; ".join(f"{key}={value} ({source})" for key, value, source in state.obsolete)
+        # A 0 still turns writes off under a kernel before the removal.
+        off = any(system.number(value) == 0 for _, value, _ in state.obsolete)
+        out.append(Finding("warn" if off else "info", "obsolete-parameters",
+                           f"Obsolete apple_sep setting{'s' if len(state.obsolete) > 1 else ''}: "
+                           f"{found}. The driver has no xart_writes or provision_keybag "
+                           f"parameter since {system.OBSOLETE_SINCE}, and kernels from then on "
+                           "ignore them: SEP writes and keybag provisioning are always on.",
+                           "Remove " + ("them" if len(state.obsolete) > 1 else "it")
+                           + " from " + _and(sorted({_where(s) for _, _, s in state.obsolete}))
+                           + "."))
     if state.lockout_file.data is not None and formats.lockout_locked(state.lockout_file.data):
         out.append(Finding("info", "touchid-locked",
                            "Touch ID is locked after failed matches; the next password "
                            "authentication unlocks it."))
     return out
+
+
+def _where(source: str) -> str:
+    """The file a modprobe.d source names, without its line, or the command line."""
+    if source == "kernel command line":
+        return "the kernel command line"
+    return source.rsplit(":", 1)[0]
+
+
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def worst(findings: list[Finding]) -> str:

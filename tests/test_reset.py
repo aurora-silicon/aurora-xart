@@ -141,13 +141,32 @@ class Reset(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("needs root", err)
 
-    def test_a_read_only_install_is_refused(self):
+    def test_an_obsolete_read_only_file_does_not_block_it(self):
+        # install-aurora-sep.sh --read-only wrote this before linux#2591; the
+        # kernel ignores it now, so only the driver's own report counts.
         m = self.stuck_m1()
-        m.write(system.MODPROBE_CONF, "options apple_sep xart_writes=0 provision_keybag=0\n")
+        m.modprobe("options apple_sep xart_writes=0 provision_keybag=0\n")
+        rc, out, err = m.run("reset-touchid", "--yes")
+        self.assertEqual(rc, 0, err)
+        self.assertFalse(m.p(system.KEYBAG).exists())
+        self.assertTrue(m.p(DEST + "/aurora-sep-keybag.bin").exists())
+        self.assertIn("Reboot now", out)
+
+    def test_writes_disabled_by_the_driver_are_refused(self):
+        m = self.stuck_m1(xart="disabled")
         before = self.snapshot(m)
         rc, _, err = m.run("reset-touchid", "--yes")
         self.assertEqual(rc, 2)
-        self.assertIn("installed read-only", err)
+        self.assertIn("reports xART writes disabled (diag/xart reads disabled)", err)
+        self.assertIn("next boot could not create one", err)
+        self.assert_unchanged(m, before)
+
+    def test_an_old_kernels_policy_with_writes_off_is_refused(self):
+        m = self.stuck_m1(abi="3", xart=None, policy="xart_writes=0 provision_keybag=0")
+        before = self.snapshot(m)
+        rc, _, err = m.run("reset-touchid", "--yes")
+        self.assertEqual(rc, 2)
+        self.assertIn("diag/policy reads xart_writes=0", err)
         self.assert_unchanged(m, before)
 
     def test_no_driver_is_refused(self):

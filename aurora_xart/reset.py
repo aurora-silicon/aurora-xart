@@ -35,10 +35,9 @@ def reset_touchid(root: Root, yes: bool, force: bool, out, err, *,
     state = st.inspect(root)
     if not state.is_apple:
         raise Refusal("this is not an Apple silicon Mac")
-    read_only, why = state.read_only
-    if read_only:
-        raise Refusal(f"this Mac was installed read-only ({why}): a new keybag needs enclave "
-                      "writes. Remove that setting first if you mean to allow them.")
+    # Only the running driver's report counts here. A stale xart_writes or
+    # provision_keybag setting does not: kernels from aurora-silicon/linux#2591
+    # on ignore it and always provision.
     if not any(root.exists(f) for f in system.TOUCHID_STATE_FILES):
         raise Refusal("no Touch ID state on this Mac; nothing to reset")
     need_root(root, "reset-touchid")
@@ -46,9 +45,11 @@ def reset_touchid(root: Root, yes: bool, force: bool, out, err, *,
     if not state.driver_running:
         raise Refusal("the Touch ID driver is not running (no SEP diagnostics). Boot the Aurora "
                       "kernel first.")
-    if state.diag.get("xart") == "disabled":
-        raise Refusal("the driver runs with xART writes disabled this boot, so it could not "
-                      "create a new keybag")
+    if state.writes_disabled:
+        raise Refusal(f"the running driver reports xART writes disabled ({state.writes_disabled}). "
+                      "A new keybag needs xART writes, so with the store read-only the next "
+                      "boot could not create one and Touch ID would stay down. Nothing was "
+                      "moved; find out why first: `journalctl -b -k | grep apple_sep`.")
 
     services = Fprintd(root, runner, sleep, out)
     # The driver loads a stored keybag, and reports failed if that does not

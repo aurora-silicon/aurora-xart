@@ -23,7 +23,6 @@ OWNED = "/var/lib/aurora-sep-xart-owned.bin"
 ALLOW = "/var/lib/aurora-sep-xart-allow-once.bin"
 PREVIOUS = "/var/lib/aurora-sep-xart-policy-previous.bin"
 FPRINT = "/var/lib/fprint"
-MODPROBE_CONF = "/etc/modprobe.d/aurora-sep.conf"
 
 # What a Touch ID reset moves aside, as install-aurora-sep.sh's
 # TOUCHID_STATE_FILES. The keybag is last: a reset that stops partway keeps
@@ -62,7 +61,11 @@ DESCRIPTIONS = {
 MODPROBE_DIRS = ["/etc/modprobe.d", "/run/modprobe.d", "/usr/local/lib/modprobe.d",
                  "/usr/lib/modprobe.d", "/lib/modprobe.d"]
 MODULE_NAMES = ("apple_sep", "apple-sep")
-PARAMS = {"xart_writes": 1, "provision_keybag": 1, "xart_guard": -1}
+PARAMS = {"xart_guard": -1}
+# Removed from apple_sep by aurora-silicon/linux#2591: SEP writes and keybag
+# provisioning are always on, and the kernel ignores a stale value.
+OBSOLETE_PARAMS = ("xart_writes", "provision_keybag")
+OBSOLETE_SINCE = "aurora-silicon/linux#2591"
 
 CALIBRATION_GLOBS = [
     "/usr/lib/firmware/apple/mesa*.bin",
@@ -95,6 +98,11 @@ class Diag:
 
     def get(self, name: str) -> str | None:
         return self.attrs.get(name)
+
+    def policy(self) -> dict[str, str]:
+        """diag/policy (ABI 3): space-separated key=value pairs, or {}."""
+        pairs = (word.partition("=") for word in (self.get("policy") or "").split())
+        return {key: value for key, sep, value in pairs if sep}
 
 
 class Root:
@@ -232,30 +240,17 @@ class Root:
             if value is not None:
                 found.append((name, value.strip(), "running module"))
         for key, value, source in found:
-            number = _number(value)
-            if number is not None:
-                result[key] = Param(number, source)
+            parsed = number(value)
+            if parsed is not None:
+                result[key] = Param(parsed, source)
         return result
 
-    def read_only_install(self) -> tuple[bool, str | None]:
-        """Whether this install keeps the driver read-only, and why.
-
-        install-aurora-sep.sh --read-only writes MODPROBE_CONF with
-        xart_writes=0 provision_keybag=0. Owners also use that file to turn
-        writes on, so what it sets counts, not that it exists. Elsewhere the
-        configured value counts."""
-        conf = self.read(MODPROBE_CONF)
-        if conf.error not in (None, "missing"):
-            return True, f"{self.show(MODPROBE_CONF)} exists but cannot be read ({conf.error})"
-        for key, value, source in self.modprobe_options():
-            if (source.startswith(MODPROBE_CONF + ":")
-                    and key in ("xart_writes", "provision_keybag") and value.strip() == "0"):
-                return True, f"{key}={value} in {MODPROBE_CONF}, the read-only install's file"
-        params = self.params()
-        for key in ("xart_writes", "provision_keybag"):
-            if params[key].value == 0:
-                return True, f"{key}=0 ({params[key].source})"
-        return False, None
+    def obsolete_options(self) -> list[tuple[str, str, str]]:
+        """(param, value, source) for every xart_writes or provision_keybag
+        setting in modprobe.d or on the command line. The driver has neither
+        parameter since aurora-silicon/linux#2591 and ignores them; status
+        names each one so it can be cleaned up."""
+        return [o for o in self.options() if o[0] in OBSOLETE_PARAMS]
 
     def fprint_dirs(self) -> tuple[list[str], str | None]:
         """Each user's /var/lib/fprint/<user>/apple-sep, and an error if
@@ -288,7 +283,7 @@ class Root:
         return found
 
 
-def _number(value: str) -> int | None:
+def number(value: str) -> int | None:
     """A parameter value as the kernel parses an integer (base 0)."""
     text = value.strip()
     sign, digits = (-1, text[1:]) if text.startswith("-") else (1, text)

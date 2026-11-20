@@ -160,14 +160,12 @@ keeps the guard's three files, the lockout record and the calibration.
 
 ## Module parameters
 
-`sep.rs` `module!` (line 3016): `xart_writes` (u8, default 1),
-`provision_keybag` (u8, default 1; probe refuses it without `xart_writes`,
-line 2906) and `xart_guard` (i8, default -1). The driver does not expose them
-in sysfs, so aurora-xart reads them as configured: modprobe.d's `options
-apple_sep` lines in kmod's order, then `apple_sep.<name>=` on the kernel
-command line, which kmod passes after them, so the last value wins. A value
-in `/sys/module/apple_sep/parameters/` replaces both, should a driver expose
-one.
+`sep.rs` `module!` (line 3016): `xart_guard` (i8, default -1) is the one
+parameter aurora-xart reads. The driver does not expose it in sysfs, so
+aurora-xart reads it as configured: modprobe.d's `options apple_sep` lines in
+kmod's order, then `apple_sep.xart_guard=` on the kernel command line, which
+kmod passes after them, so the last value wins. A value in
+`/sys/module/apple_sep/parameters/` replaces both, should a driver expose one.
 
 `xart_guard` -1 takes the profile's level (`xart_guard.rs` `level`, line 228;
 `profile.rs`): 0 on T8103/J313, T6000/J316s (M1 family) and T8140/J700
@@ -176,12 +174,27 @@ one.
 profile from the root `compatible` list. A level above 2 counts as 2. No
 guard runs while xART writes are disabled.
 
-A read-only install (`install-aurora-sep.sh --read-only`, `sep_policy`, line 3662)
-writes `options apple_sep xart_writes=0 provision_keybag=0` to
-`/etc/modprobe.d/aurora-sep.conf` (`MODPROBE_CONF`, line 301). The installer's
-`--reset-touchid` refuses whenever that file exists; owners also use the file
-to turn writes on, so aurora-xart refuses only when it, or the configuration
-as a whole, turns either parameter off.
+### Obsolete: `xart_writes` and `provision_keybag`
+
+SEP writes are always on. aurora-silicon/linux#2591 removed the `xart_writes`
+and `provision_keybag` parameters: the driver always opens the xART store for
+writing, with the APFS extent and record checks still deciding, and always
+provisions a missing identity keybag (an existing one is kept). A stale
+`apple_sep.xart_writes=` or `apple_sep.provision_keybag=`, on the kernel
+command line or in modprobe.d, is ignored: the module loader logs "unknown
+parameter ... ignored" and the driver loads. On kernels before #2591 the same
+parameter given twice, for example on the command line and in modprobe.d,
+failed the load.
+
+aurora-xart reads both names from the same places as `xart_guard` and
+`status` lists each one, with its file and line or the command line, as an
+obsolete setting to remove (a warning when it is 0, which turned writes off
+under an older kernel, otherwise a note). Neither name decides anything:
+whether writes are disabled comes only from the running driver, `diag/xart`
+or `diag/policy` below. Before #2591, `install-aurora-sep.sh --read-only`
+wrote `options apple_sep xart_writes=0 provision_keybag=0` to
+`/etc/modprobe.d/aurora-sep.conf`; such a file is reported the same way and
+no longer blocks `reset-touchid`.
 
 ## The driver's diagnostics
 
@@ -190,7 +203,20 @@ as a whole, turns either parameter off.
 aurora-xart reads every attribute there and uses `keybag` (`present`,
 `missing`, `failed`, `unknown`), `touchid`, `xart` (`enabled`, `disabled`),
 `xart_guard` (the effective level), `xart_guard_list` (`none`, `loaded`,
-`unavailable`), `xart_guard_refusals` and `matching`. The guard attributes are
-newer than ABI 2 itself, so their absence is not an error. `keybag` reads
-`failed` when the bring-up could not provision the keybag (`sbio.rs`, line
-1879), which is what the stuck intent causes.
+`unavailable`), `xart_guard_refusals`, `matching` and, from ABI 3, `policy`.
+The guard attributes are newer than ABI 2 itself, so their absence is not an
+error. `keybag` reads `failed` when the bring-up could not provision the
+keybag (`sbio.rs`, line 1879), which is what the stuck intent causes.
+
+`xart` reads `disabled` when the SEP's xART writes are refused this boot.
+From aurora-silicon/linux#2591 on that is only the key-store-only initrd
+phase, before `complete_attach`, or a failed writable reopen; no parameter
+turns writes off. `policy` is a space-separated `key=value` snapshot of the
+policy chosen at probe: its `xart_writes` is the effective writability, and
+`provision_keybag` always reads 1 from #2591 on. A kernel before #2591 may
+still show `provision_keybag=0`, or `xart_writes=0`, for a leftover setting;
+aurora-xart reads that as the driver's report of an old kernel, not as a
+setting to choose. Either `xart` = `disabled` or `policy` `xart_writes=0`
+counts as writes disabled; `status` warns, the configured guard level drops
+to 0, and `reset-touchid` refuses, since the next boot could not create a
+keybag.

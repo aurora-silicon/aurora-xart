@@ -57,10 +57,17 @@ and NixOS.
 
 **`status`** shows the platform and its SEP profile, the driver's diagnostics
 from `/sys/bus/platform/devices/*.sep/diag`, the effective xART guard level,
-the module parameters and where each value comes from, whether the install
-is read-only, the keybag slot and the guard list, and then explains anything
-stuck. Without root it shows what sysfs and the configuration show and says
-which files need root.
+the module parameters and where each value comes from, the keybag slot and
+the guard list, and then explains anything stuck. Without root it shows what
+sysfs and the configuration show and says which files need root.
+
+SEP writes and keybag provisioning are always on: aurora-silicon/linux#2591
+removed the driver's `xart_writes` and `provision_keybag` parameters, and the
+kernel ignores a stale value. `status` names any such setting left in
+modprobe.d (for example an old `install-aurora-sep.sh --read-only`
+`/etc/modprobe.d/aurora-sep.conf`) or on the kernel command line, with the
+file and line to clean up. Whether writes are disabled this boot comes only
+from the running driver's `diag/xart` and `diag/policy`.
 
 **`list`** lists the records on Linux's guard list (kind and session id, no
 key material), torn and repeated entries, the one-time allowance, the saved
@@ -70,10 +77,12 @@ calibration files exist.
 
 **`reset-touchid [--yes] [--force]`** starts Touch ID over:
 
-- it refuses on a read-only install, when the driver is not running, when
-  xART writes are disabled this boot, and when the keybag works unless
+- it refuses when the driver is not running, when the running driver
+  reports xART writes disabled this boot (a new keybag needs them, so the
+  next boot could not create one), and when the keybag works unless
   `--force` (if Touch ID has not been activated this boot it opens the sensor
-  once through `fprintd-list` first, since only that loads the keybag);
+  once through `fprintd-list` first, since only that loads the keybag); an
+  obsolete `xart_writes=0` setting does not block it;
 - it says what is lost and asks you to type RESET unless `--yes`;
 - it masks fprintd until the next boot, so no match or enrolment writes state
   behind it;
