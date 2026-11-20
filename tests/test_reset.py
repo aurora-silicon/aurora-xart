@@ -169,6 +169,17 @@ class Reset(unittest.TestCase):
         self.assertIn("diag/policy reads xart_writes=0", err)
         self.assert_unchanged(m, before)
 
+    def test_an_old_kernel_without_provisioning_is_refused(self):
+        # A kernel before linux#2591 running provision_keybag=0 would not create
+        # a new keybag at the next boot: the reset would leave Touch ID down.
+        m = self.stuck_m1(abi="3", xart="enabled", policy="xart_writes=1 provision_keybag=0")
+        before = self.snapshot(m)
+        rc, _, err = m.run("reset-touchid", "--yes")
+        self.assertEqual(rc, 2)
+        self.assertIn("reports provision_keybag=0", err)
+        self.assertIn("would not create a new", err)
+        self.assert_unchanged(m, before)
+
     def test_no_driver_is_refused(self):
         m = self.stuck_m1()
         for name in ("keybag", "touchid", "xart_guard"):

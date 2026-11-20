@@ -218,6 +218,20 @@ class Configuration(Base):
         self.assertEqual(obsolete["level"], "info")
         self.assertEqual(obsolete["action"], "Remove them from the kernel command line.")
 
+    def test_obsolete_values_from_the_package_say_update_it(self):
+        # aurora-sep before its writes-always-on release shipped this file.
+        m = self.mac("m2pro")
+        m.committed()
+        m.write("/usr/lib/modprobe.d/aurora-sep.conf",
+                b"options apple_sep xart_writes=1 provision_keybag=1\n")
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        obsolete = self.codes(data)["obsolete-parameters"]
+        self.assertEqual(obsolete["level"], "info")
+        self.assertEqual(obsolete["action"],
+                         "/usr/lib/modprobe.d/aurora-sep.conf comes from a package: "
+                         "update aurora-sep, whose current release ships none.")
+
     def test_writes_disabled_by_the_driver(self):
         m = self.mac("m2pro", xart="disabled", keybag="missing", touchid="failed",
                      xart_guard="0", xart_guard_list="none")

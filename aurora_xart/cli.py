@@ -32,7 +32,8 @@ FILES = "\n".join(f"  {path:<46}{what}" for path, what in (
     (system.OWNED, "Linux's xART records (the guard list)"),
     (system.ALLOW, "the one-time allowance"),
     (system.PREVIOUS, "saved previous values"),
-    ("/etc/modprobe.d/*.conf, /proc/cmdline", "apple_sep options"),
+    ("{/etc,/run,/usr/local/lib,/usr/lib,/lib}/modprobe.d/*.conf", "apple_sep options"),
+    ("/proc/cmdline", "apple_sep options on the kernel command line"),
     ("/sys/bus/platform/devices/*.sep/diag/", "the driver's diagnostics"),
 ))
 
@@ -114,7 +115,7 @@ def status_json(s: st.State) -> dict:
                   "listed": g.listed if g.listed_known else "unknown"},
         # As the running driver reports it; null without the driver.
         "xart_writes": {"disabled": (s.writes_disabled is not None) if s.driver_running
-                        else None, "why": s.writes_disabled},
+                        else None, "why": s.writes_disabled if s.driver_running else None},
         "obsolete_params": [{"param": k, "value": v, "source": src}
                             for k, v, src in s.obsolete],
         "keybag": _keybag_json(s, False),

@@ -359,6 +359,12 @@ def diagnose(state: State) -> list[Finding]:
             out.append(Finding("info", "not-provisioned",
                                "Touch ID reads failed because no keybag was provisioned: "
                                "xART writes are disabled this boot."))
+    elif (d.policy().get("provision_keybag") == "0" and d.get("touchid") == "failed"
+          and d.get("keybag") == "missing"):
+        out.append(Finding("info", "not-provisioned",
+                           "Touch ID reads failed because no keybag was provisioned: the "
+                           "running kernel predates aurora-silicon/linux#2591 and reports "
+                           "provision_keybag=0 (diag/policy)."))
 
     # The xART guard.
     g = state.guard
@@ -413,14 +419,29 @@ def diagnose(state: State) -> list[Finding]:
                            f"{found}. The driver has no xart_writes or provision_keybag "
                            f"parameter since {system.OBSOLETE_SINCE}, and kernels from then on "
                            "ignore them: SEP writes and keybag provisioning are always on.",
-                           "Remove " + ("them" if len(state.obsolete) > 1 else "it")
-                           + " from " + _and(sorted({_where(s) for _, _, s in state.obsolete}))
-                           + "."))
+                           _cleanup(state.obsolete)))
     if state.lockout_file.data is not None and formats.lockout_locked(state.lockout_file.data):
         out.append(Finding("info", "touchid-locked",
                            "Touch ID is locked after failed matches; the next password "
                            "authentication unlocks it."))
     return out
+
+
+def _cleanup(obsolete) -> str:
+    """What to do about obsolete settings: an owner's own file or the command
+    line is edited; a file under /usr/lib or /run belongs to a package (the
+    aurora-sep package shipped one before the removal) and goes with its update."""
+    places = sorted({_where(s) for _, _, s in obsolete})
+    own = [p for p in places if not p.startswith(("/usr/", "/lib/", "/run/"))]
+    packaged = [p for p in places if p not in own]
+    steps = []
+    if own:
+        which = "them" if len(obsolete) > 1 else "it"
+        steps.append(f"Remove {which} from {_and(own)}.")
+    if packaged:
+        steps.append(_and(packaged) + (" comes" if len(packaged) == 1 else " come")
+                     + " from a package: update aurora-sep, whose current release ships none.")
+    return " ".join(steps)
 
 
 def _where(source: str) -> str:
