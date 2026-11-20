@@ -139,6 +139,22 @@ def writes_disabled(diag: system.Diag) -> str | None:
     return None
 
 
+def no_provisioning(diag: system.Diag, obsolete) -> str | None:
+    """Why the running kernel will not create a missing identity keybag, or None.
+    A kernel with diag/policy (ABI 3) says so itself; one from before it (ABI 2)
+    still has the provision_keybag parameter, so a 0 in its configuration is in
+    effect there. Kernels from aurora-silicon/linux#2591 on always provision."""
+    if diag.get("policy") is not None:
+        if diag.policy().get("provision_keybag") == "0":
+            return "the running kernel reports provision_keybag=0 (diag/policy)"
+        return None
+    for key, value, source in obsolete:
+        if key == "provision_keybag" and system.number(value) == 0:
+            return (f"provision_keybag=0 ({source}) is still in effect on this kernel, "
+                    "which predates diag/policy")
+    return None
+
+
 def inspect(root: Root) -> State:
     compatible = root.compatible()
     profile = platform.select(compatible)
@@ -359,12 +375,11 @@ def diagnose(state: State) -> list[Finding]:
             out.append(Finding("info", "not-provisioned",
                                "Touch ID reads failed because no keybag was provisioned: "
                                "xART writes are disabled this boot."))
-    elif (d.policy().get("provision_keybag") == "0" and d.get("touchid") == "failed"
+    elif ((why := no_provisioning(d, state.obsolete)) and d.get("touchid") == "failed"
           and d.get("keybag") == "missing"):
         out.append(Finding("info", "not-provisioned",
                            "Touch ID reads failed because no keybag was provisioned: the "
-                           "running kernel predates aurora-silicon/linux#2591 and reports "
-                           "provision_keybag=0 (diag/policy)."))
+                           f"kernel predates aurora-silicon/linux#2591 and {why}."))
 
     # The xART guard.
     g = state.guard
@@ -429,14 +444,16 @@ def diagnose(state: State) -> list[Finding]:
 
 def _cleanup(obsolete) -> str:
     """What to do about obsolete settings: an owner's own file or the command
-    line is edited; a file under /usr/lib or /run belongs to a package (the
-    aurora-sep package shipped one before the removal) and goes with its update."""
+    line is edited; a file under /usr/lib or /lib belongs to a package (the
+    aurora-sep package shipped one before the removal) and goes with its update.
+    /usr/local and /run are the admin's or a local script's."""
     places = sorted({_where(s) for _, _, s in obsolete})
-    own = [p for p in places if not p.startswith(("/usr/", "/lib/", "/run/"))]
+    own = [p for p in places if not p.startswith(("/usr/lib/", "/lib/"))]
     packaged = [p for p in places if p not in own]
     steps = []
     if own:
-        which = "them" if len(obsolete) > 1 else "it"
+        n = sum(1 for _, _, s in obsolete if _where(s) in own)
+        which = "them" if n > 1 else "it"
         steps.append(f"Remove {which} from {_and(own)}.")
     if packaged:
         steps.append(_and(packaged) + (" comes" if len(packaged) == 1 else " come")

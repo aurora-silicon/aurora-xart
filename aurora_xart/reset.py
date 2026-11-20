@@ -52,11 +52,12 @@ def reset_touchid(root: Root, yes: bool, force: bool, out, err, *,
                       "moved; find out why first: `journalctl -b -k | grep apple_sep`.")
     # A kernel from before aurora-silicon/linux#2591 can still run with
     # provision_keybag=0; then the next boot would not create the keybag either.
-    if state.diag.policy().get("provision_keybag") == "0":
-        raise Refusal("the running kernel predates aurora-silicon/linux#2591 and reports "
-                      "provision_keybag=0 (diag/policy), so the next boot would not create a new "
-                      "Touch ID keybag and Touch ID would stay down. Nothing was moved; boot a "
-                      "current kernel, or remove the provision_keybag setting, first.")
+    why = st.no_provisioning(state.diag, state.obsolete)
+    if why:
+        raise Refusal(f"the kernel predates aurora-silicon/linux#2591 and {why}, so the next "
+                      "boot would not create a new Touch ID keybag and Touch ID would stay "
+                      "down. Nothing was moved; boot a current kernel, or remove the "
+                      "provision_keybag setting, first.")
 
     services = Fprintd(root, runner, sleep, out)
     # The driver loads a stored keybag, and reports failed if that does not

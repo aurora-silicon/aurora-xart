@@ -232,6 +232,19 @@ class Configuration(Base):
                          "/usr/lib/modprobe.d/aurora-sep.conf comes from a package: "
                          "update aurora-sep, whose current release ships none.")
 
+    def test_obsolete_advice_counts_per_file_and_keeps_usr_local(self):
+        m = self.mac("m2pro")
+        m.committed()
+        m.write("/usr/local/lib/modprobe.d/x.conf", b"options apple_sep xart_writes=1\n")
+        m.write("/usr/lib/modprobe.d/aurora-sep.conf",
+                b"options apple_sep xart_writes=1 provision_keybag=1\n")
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.codes(data)["obsolete-parameters"]["action"],
+                         "Remove it from /usr/local/lib/modprobe.d/x.conf. "
+                         "/usr/lib/modprobe.d/aurora-sep.conf comes from a package: "
+                         "update aurora-sep, whose current release ships none.")
+
     def test_writes_disabled_by_the_driver(self):
         m = self.mac("m2pro", xart="disabled", keybag="missing", touchid="failed",
                      xart_guard="0", xart_guard_list="none")
