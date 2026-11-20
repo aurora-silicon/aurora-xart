@@ -32,7 +32,8 @@ FILES = "\n".join(f"  {path:<46}{what}" for path, what in (
     (system.OWNED, "Linux's xART records (the guard list)"),
     (system.ALLOW, "the one-time allowance"),
     (system.PREVIOUS, "saved previous values"),
-    (system.MODPROBE_CONF, "a read-only install's settings"),
+    ("{/etc,/run,/usr/local/lib,/usr/lib,/lib}/modprobe.d/*.conf", "apple_sep options"),
+    ("/proc/cmdline", "apple_sep options on the kernel command line"),
     ("/sys/bus/platform/devices/*.sep/diag/", "the driver's diagnostics"),
 ))
 
@@ -40,14 +41,18 @@ EPILOG = f"""\
 commands:
   status          The driver's state from sysfs, the platform, the xART guard
                   level and the module parameters, and in plain words what
-                  is wrong, if anything, and what to do. --json for scripts.
+                  is wrong, if anything, and what to do. It names any
+                  obsolete xart_writes or provision_keybag setting, which
+                  kernels from aurora-silicon/linux#2591 on ignore. --json
+                  for scripts.
   list            Linux's xART records from the guard list (kind and session
                   id, no key material), the one-time allowance, the saved
                   previous values, the keybag slot and which state files
                   exist. --json for scripts.
   reset-touchid   Start Touch ID over when its keybag is stuck or no longer
-                  loads. Refuses on a read-only install, when the driver is
-                  not running, and when the keybag works (unless --force).
+                  loads. Refuses when the driver is not running or reports
+                  xART writes disabled this boot, and when the keybag works
+                  (unless --force).
                   Asks you to type RESET (unless --yes), stops fprintd, and
                   moves the Touch ID state and each user's prints into
                   /var/lib/aurora-sep-touchid-reset-<time>/, putting
@@ -108,7 +113,11 @@ def status_json(s: st.State) -> dict:
         "guard": {"level": g.level, "source": g.source, "list": g.list_state,
                   "refusals": g.refusals, "matching": g.matching,
                   "listed": g.listed if g.listed_known else "unknown"},
-        "read_only": {"value": s.read_only[0], "why": s.read_only[1]},
+        # As the running driver reports it; null without the driver.
+        "xart_writes": {"disabled": (s.writes_disabled is not None) if s.driver_running
+                        else None, "why": s.writes_disabled if s.driver_running else None},
+        "obsolete_params": [{"param": k, "value": v, "source": src}
+                            for k, v, src in s.obsolete],
         "keybag": _keybag_json(s, False),
         "findings": [f.json() for f in s.findings],
         "verdict": st.worst(s.findings),
@@ -201,10 +210,12 @@ def print_findings(s: st.State, out) -> None:
         return
     for f in shown:
         tag = {"info": "note", "warn": "warning", "error": "PROBLEM"}[f.level]
-        print(textwrap.fill(f"{tag}: {f.message}", 79, subsequent_indent="  "), file=out)
+        # No breaks at hyphens: the messages name paths.
+        print(textwrap.fill(f"{tag}: {f.message}", 79, subsequent_indent="  ",
+                            break_on_hyphens=False), file=out)
         if f.action:
-            print(textwrap.fill(f.action, 79, initial_indent="  -> ",
-                                subsequent_indent="     "), file=out)
+            print(textwrap.fill(f.action, 79, initial_indent="  -> ", subsequent_indent="     ",
+                                break_on_hyphens=False), file=out)
 
 
 def print_status(s: st.State, out) -> None:
@@ -244,9 +255,9 @@ def print_status(s: st.State, out) -> None:
         if name == "xart_guard" and p.value < 0:
             note += ": the platform's level"
         params.append(f"{name + '=' + str(p.value):<20} {note}")
+    for name, value, source in s.obsolete:
+        params.append(f"{name + '=' + value:<20} {source}: obsolete since linux#2591")
     _row(out, "Parameters", "\n".join(params))
-    ro, why = s.read_only
-    _row(out, "Install", f"read-only ({why})" if ro else "writable")
     _row(out, "Keybag slot", _keybag_text(s))
     _row(out, "Guard list", _list_summary(s))
     print_findings(s, out)

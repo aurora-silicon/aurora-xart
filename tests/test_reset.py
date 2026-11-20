@@ -141,14 +141,62 @@ class Reset(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("needs root", err)
 
-    def test_a_read_only_install_is_refused(self):
-        m = self.stuck_m1()
-        m.write(system.MODPROBE_CONF, "options apple_sep xart_writes=0 provision_keybag=0\n")
+    def test_an_obsolete_read_only_file_does_not_block_it(self):
+        # install-aurora-sep.sh --read-only wrote this before linux#2591; the
+        # kernel ignores it now, so only the driver's own report counts. Such a
+        # kernel has diag/policy (ABI 3) and reports writes and provisioning on.
+        m = self.stuck_m1(abi="3", policy="xart_writes=1 provision_keybag=1 xart_guard=0")
+        m.modprobe("options apple_sep xart_writes=0 provision_keybag=0\n")
+        rc, out, err = m.run("reset-touchid", "--yes")
+        self.assertEqual(rc, 0, err)
+        self.assertFalse(m.p(system.KEYBAG).exists())
+        self.assertTrue(m.p(DEST + "/aurora-sep-keybag.bin").exists())
+        self.assertIn("Reboot now", out)
+
+    def test_writes_disabled_by_the_driver_are_refused(self):
+        m = self.stuck_m1(xart="disabled")
         before = self.snapshot(m)
         rc, _, err = m.run("reset-touchid", "--yes")
         self.assertEqual(rc, 2)
-        self.assertIn("installed read-only", err)
+        self.assertIn("reports xART writes disabled (diag/xart reads disabled)", err)
+        self.assertIn("next boot could not create one", err)
         self.assert_unchanged(m, before)
+
+    def test_an_old_kernels_policy_with_writes_off_is_refused(self):
+        m = self.stuck_m1(abi="3", xart=None, policy="xart_writes=0 provision_keybag=0")
+        before = self.snapshot(m)
+        rc, _, err = m.run("reset-touchid", "--yes")
+        self.assertEqual(rc, 2)
+        self.assertIn("diag/policy reads xart_writes=0", err)
+        self.assert_unchanged(m, before)
+
+    def test_an_old_kernel_without_provisioning_is_refused(self):
+        # A kernel before linux#2591 running provision_keybag=0 would not create
+        # a new keybag at the next boot: the reset would leave Touch ID down.
+        m = self.stuck_m1(abi="3", xart="enabled", policy="xart_writes=1 provision_keybag=0")
+        before = self.snapshot(m)
+        rc, _, err = m.run("reset-touchid", "--yes")
+        self.assertEqual(rc, 2)
+        self.assertIn("reports provision_keybag=0 (diag/policy)", err)
+        self.assertIn("would not create a new", err)
+        self.assert_unchanged(m, before)
+
+    def test_an_abi2_kernel_with_provision_keybag_0_is_refused(self):
+        # Kernels before diag/policy (ABI 2) still have the parameter, so a 0 in
+        # modprobe.d or on the command line is in effect there.
+        for where in ("modprobe", "cmdline"):
+            with self.subTest(where=where):
+                m = self.stuck_m1(xart="enabled")
+                if where == "modprobe":
+                    m.modprobe("options apple_sep provision_keybag=0\n")
+                else:
+                    m.write("/proc/cmdline", b"root=x apple_sep.provision_keybag=0\n")
+                before = self.snapshot(m)
+                rc, _, err = m.run("reset-touchid", "--yes")
+                self.assertEqual(rc, 2)
+                self.assertIn("provision_keybag=0", err)
+                self.assertIn("predates diag/policy", err)
+                self.assert_unchanged(m, before)
 
     def test_no_driver_is_refused(self):
         m = self.stuck_m1()

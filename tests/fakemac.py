@@ -81,6 +81,10 @@ class FakeMac:
                 continue
             self.write(path, f"{value}\n", 0o444)
 
+    def modprobe(self, text: str, path: str = "/etc/modprobe.d/aurora-sep.conf") -> None:
+        """A modprobe.d file, as an owner or an old install left it."""
+        self.write(path, text, 0o644)
+
     # ---- state files ------------------------------------------------------
 
     def intent(self, unfinished: formats.Unfinished) -> None:

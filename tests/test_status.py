@@ -177,25 +177,109 @@ class List(Base):
 
 
 class Configuration(Base):
-    def test_a_read_only_install(self):
+    def test_an_old_read_only_file_is_obsolete_not_read_only(self):
+        # install-aurora-sep.sh --read-only wrote this before linux#2591.
+        m = self.mac("m2pro")
+        m.committed()
+        m.modprobe("options apple_sep xart_writes=0 provision_keybag=0\n")
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        self.assertEqual(data["xart_writes"], {"disabled": False, "why": None})
+        self.assertNotIn("xart_writes", data["params"])
+        self.assertNotIn("provision_keybag", data["params"])
+        self.assertEqual(data["obsolete_params"], [
+            {"param": "xart_writes", "value": "0",
+             "source": "/etc/modprobe.d/aurora-sep.conf:1"},
+            {"param": "provision_keybag", "value": "0",
+             "source": "/etc/modprobe.d/aurora-sep.conf:1"}])
+        codes = self.codes(data)
+        self.assertNotIn("xart-writes-disabled", codes)
+        self.assertNotIn("not-provisioned", codes)
+        obsolete = codes["obsolete-parameters"]
+        self.assertEqual(obsolete["level"], "warn")
+        self.assertIn("aurora-silicon/linux#2591", obsolete["message"])
+        self.assertIn("always on", obsolete["message"])
+        self.assertEqual(obsolete["action"], "Remove them from /etc/modprobe.d/aurora-sep.conf.")
+        rc, out, _ = m.run("status")
+        self.assertIn("/etc/modprobe.d/aurora-sep.conf:1: obsolete since linux#2591", out)
+        self.assertNotIn("read-only", out)
+
+    def test_obsolete_values_on_the_command_line(self):
+        m = self.mac("m2pro")
+        m.committed()
+        m.write("/proc/cmdline", b"root=x apple_sep.xart_writes=1 apple-sep.provision_keybag=1\n")
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        self.assertEqual([(o["param"], o["source"]) for o in data["obsolete_params"]],
+                         [("xart_writes", "kernel command line"),
+                          ("provision_keybag", "kernel command line")])
+        obsolete = self.codes(data)["obsolete-parameters"]
+        # Values of 1 never turned anything off: a note, not a warning.
+        self.assertEqual(obsolete["level"], "info")
+        self.assertEqual(obsolete["action"], "Remove them from the kernel command line.")
+
+    def test_obsolete_values_from_the_package_say_update_it(self):
+        # aurora-sep before its writes-always-on release shipped this file.
+        m = self.mac("m2pro")
+        m.committed()
+        m.write("/usr/lib/modprobe.d/aurora-sep.conf",
+                b"options apple_sep xart_writes=1 provision_keybag=1\n")
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        obsolete = self.codes(data)["obsolete-parameters"]
+        self.assertEqual(obsolete["level"], "info")
+        self.assertEqual(obsolete["action"],
+                         "/usr/lib/modprobe.d/aurora-sep.conf comes from a package: "
+                         "update aurora-sep, whose current release ships none.")
+
+    def test_obsolete_advice_counts_per_file_and_keeps_usr_local(self):
+        m = self.mac("m2pro")
+        m.committed()
+        m.write("/usr/local/lib/modprobe.d/x.conf", b"options apple_sep xart_writes=1\n")
+        m.write("/usr/lib/modprobe.d/aurora-sep.conf",
+                b"options apple_sep xart_writes=1 provision_keybag=1\n")
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.codes(data)["obsolete-parameters"]["action"],
+                         "Remove it from /usr/local/lib/modprobe.d/x.conf. "
+                         "/usr/lib/modprobe.d/aurora-sep.conf comes from a package: "
+                         "update aurora-sep, whose current release ships none.")
+
+    def test_writes_disabled_by_the_driver(self):
         m = self.mac("m2pro", xart="disabled", keybag="missing", touchid="failed",
                      xart_guard="0", xart_guard_list="none")
-        m.write("/etc/modprobe.d/aurora-sep.conf",
-                "options apple_sep xart_writes=0 provision_keybag=0\n", 0o644)
         rc, data = self.status(m)
-        self.assertTrue(data["read_only"]["value"])
+        self.assertEqual(data["xart_writes"],
+                         {"disabled": True, "why": "diag/xart reads disabled"})
+        self.assertEqual(data["obsolete_params"], [])
         codes = self.codes(data)
-        self.assertIn("read-only", codes)
+        self.assertEqual(codes["xart-writes-disabled"]["level"], "warn")
+        self.assertIn("complete_attach", codes["xart-writes-disabled"]["message"])
         self.assertIn("not-provisioned", codes)
-        self.assertEqual(data["params"]["xart_writes"]["value"], 0)
+        self.assertNotIn("obsolete-parameters", codes)
 
-    def test_the_owners_file_that_enables_writes_is_not_read_only(self):
-        # The M2 Pro's own /etc/modprobe.d/aurora-sep.conf turns writes on.
-        m = self.mac("m2pro")
-        m.write("/etc/modprobe.d/aurora-sep.conf",
-                "options apple_sep xart_writes=1 provision_keybag=1\n", 0o644)
-        _, data = self.status(m)
-        self.assertFalse(data["read_only"]["value"])
+    def test_an_old_kernels_policy_is_still_read(self):
+        # A kernel before linux#2591 with a leftover xart_writes=0 reports it
+        # in diag/policy (ABI 3); that is the driver's report, so it counts.
+        m = self.mac("m2pro", abi="3", xart=None, keybag="missing", xart_guard=None,
+                     policy="xart_writes=0 provision_keybag=0 xart_guard=0 trusted_keys=1")
+        rc, data = self.status(m)
+        self.assertEqual(data["xart_writes"]["why"], "diag/policy reads xart_writes=0")
+        self.assertEqual(data["guard"]["level"], 0)
+        codes = self.codes(data)
+        self.assertIn("xart-writes-disabled", codes)
+        self.assertIn("predates aurora-silicon/linux#2591", codes["keybag-none"]["message"])
+
+    def test_a_current_kernels_policy(self):
+        m = self.mac("m2pro", abi="3", keybag="missing",
+                     policy="xart_writes=1 provision_keybag=1 xart_guard=1 trusted_keys=1")
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        self.assertIs(data["xart_writes"]["disabled"], False)
+        codes = self.codes(data)
+        self.assertNotIn("xart-writes-disabled", codes)
+        self.assertEqual(codes["keybag-none"]["message"],
+                         "No identity keybag is stored yet: Touch ID is not set up.")
 
     def test_parameter_precedence(self):
         m = self.mac("m2pro")
@@ -207,7 +291,10 @@ class Configuration(Base):
         # /etc hides the same name in /usr/lib; later files win.
         self.assertEqual(data["params"]["xart_guard"],
                          {"value": 0, "source": "/etc/modprobe.d/50-sep.conf:1"})
-        self.assertEqual(data["params"]["provision_keybag"]["value"], 0)
+        self.assertEqual(list(data["params"]), ["xart_guard"])
+        self.assertEqual(data["obsolete_params"],
+                         [{"param": "provision_keybag", "value": "0",
+                           "source": "/usr/lib/modprobe.d/60-sep.conf:1"}])
         m.write("/proc/cmdline", b"root=x apple_sep.xart_guard=1\n")
         _, data = self.status(m)
         self.assertEqual(data["params"]["xart_guard"],
@@ -215,11 +302,14 @@ class Configuration(Base):
 
     def test_no_driver(self):
         m = self.mac("m2pro", driver=False)
+        # An obsolete setting no longer turns the configured guard off.
+        m.modprobe("options apple_sep xart_writes=0 provision_keybag=0\n")
         rc, data = self.status(m)
         self.assertIn("driver-not-running", self.codes(data))
         # Without the driver's report the level comes from the configuration.
         self.assertEqual(data["guard"], {"level": 1, "source": "configuration", "list": None,
                                          "refusals": None, "matching": None, "listed": 0})
+        self.assertEqual(data["xart_writes"], {"disabled": None, "why": None})
 
     def test_guard_refusals_are_not_a_reset_case(self):
         m = self.mac("m2pro", xart_guard_refusals="2", matching="blocked")

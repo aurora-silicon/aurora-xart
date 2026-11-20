@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: MIT
-.TH AURORA-XART 8 2026-11-07 "aurora-xart 0.1.0" "Aurora Linux"
+.TH AURORA-XART 8 2026-11-20 "aurora-xart 0.2.0" "Aurora Linux"
 .SH NAME
 aurora-xart \- inspect and manage Linux's Secure Enclave and xART state
 .SH SYNOPSIS
@@ -48,8 +48,19 @@ Shows the platform and the SEP profile the driver uses, the driver's
 diagnostics from
 .IR /sys/bus/platform/devices/*.sep/diag ,
 the effective xART guard level, the module parameters with where each value
-comes from, whether this is a read-only install, the keybag slot and the
-guard list.
+comes from, the keybag slot and the guard list.
+It names any
+.B xart_writes
+or
+.B provision_keybag
+setting in modprobe.d or on the kernel command line as obsolete, with its
+file and line, so it can be removed: the driver has had neither parameter
+since aurora-silicon/linux#2591 and ignores them, and SEP writes and keybag
+provisioning are always on.
+Whether xART writes are disabled this boot comes only from the running
+driver
+.RI ( diag/xart ,
+.IR diag/policy ).
 It then explains any stuck state, for example an earlier keybag create that
 never finished, and says what to run.
 With no command,
@@ -66,9 +77,13 @@ files exist.
 .TP
 .B reset-touchid
 Starts Touch ID over on a Mac whose keybag is stuck or no longer loads.
-It refuses on a read-only install, when the driver is not running, when xART
-writes are disabled this boot, and when the keybag works (unless
+It refuses when the driver is not running, when the running driver reports
+xART writes disabled this boot (then the next boot could not create a keybag
+either), and when the keybag works (unless
 .BR \-\-force ).
+An obsolete
+.B xart_writes=0
+setting does not block it.
 If Touch ID has not been activated this boot, it opens the sensor once
 through
 .B fprintd-list
@@ -139,9 +154,15 @@ A one-time allowance for a boot policy change.
 Saved previous values of records a window or allowance let the enclave
 rewrite.
 .TP
-.I /etc/modprobe.d/aurora-sep.conf
-A read-only install's settings
-.RB ( "xart_writes=0 provision_keybag=0" ).
+.I /etc/modprobe.d, /run/modprobe.d, /usr/local/lib/modprobe.d, /usr/lib/modprobe.d, /lib/modprobe.d, /proc/cmdline
+.B apple_sep
+options:
+.B xart_guard
+and any obsolete
+.B xart_writes
+or
+.B provision_keybag
+setting.
 .SH NOTES
 Reading the state files needs root; the diagnostics and the configuration do
 not.
