@@ -155,10 +155,28 @@ def no_provisioning(diag: system.Diag, obsolete) -> str | None:
     return None
 
 
+def _resolve_profile(compatible: list[str], diag: system.Diag,
+                     chip: str | None) -> platform.Profile | None:
+    """Use the static profile table, or fall back to what the running driver reports."""
+    known = platform.select(compatible)
+    driver_profile = diag.get("profile")
+    if known is not None:
+        if driver_profile and driver_profile != known.name:
+            return platform.Profile(
+                driver_profile, known.chip, known.guard_default,
+                diag.get("boot") or known.bootstrap,
+            )
+        return known
+    if driver_profile:
+        return platform.Profile(driver_profile, chip, None, diag.get("boot"))
+    return None
+
+
 def inspect(root: Root) -> State:
     compatible = root.compatible()
-    profile = platform.select(compatible)
+    chip = platform.chip(compatible)
     diag = root.diag()
+    profile = _resolve_profile(compatible, diag, chip)
     params = root.params()
     disabled = writes_disabled(diag)
 
@@ -167,8 +185,9 @@ def inspect(root: Root) -> State:
         guard = Guard(level, "driver", diag.get("xart_guard_list"),
                       _int(diag.get("xart_guard_refusals")), diag.get("matching"))
     else:
-        level = platform.guard_level(params["xart_guard"].value,
-                                     profile.guard_default if profile else 0)
+        default_guard = (profile.guard_default
+                         if profile is not None and profile.guard_default is not None else 0)
+        level = platform.guard_level(params["xart_guard"].value, default_guard)
         if disabled:
             level = 0
         guard = Guard(level, "configuration")
@@ -197,7 +216,7 @@ def inspect(root: Root) -> State:
     fprint_dirs, fprint_error = root.fprint_dirs()
 
     state = State(
-        root=root, model=root.model(), compatible=compatible, chip=platform.chip(compatible),
+        root=root, model=root.model(), compatible=compatible, chip=chip,
         profile=profile, diag=diag, module_loaded=root.module_loaded(), params=params,
         writes_disabled=disabled, obsolete=root.obsolete_options(), guard=guard,
         keybag_file=keybag_file, keybag=keybag, list_file=list_file, guard_list=guard_list,
@@ -263,7 +282,7 @@ def diagnose(state: State) -> list[Finding]:
                            "This is not an Apple silicon Mac: the device tree names no apple, "
                            "machine."))
         return out
-    if state.profile is None:
+    if state.profile is None and not state.driver_running:
         chip = state.chip or "unknown chip"
         out.append(Finding("info", "no-profile",
                            f"The SEP driver has no profile for this Mac ({chip}), so it does "
