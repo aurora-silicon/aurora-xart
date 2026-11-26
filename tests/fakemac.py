@@ -20,6 +20,10 @@ BOARDS = {
               "Apple MacBook Pro (14-inch, M2 Pro, 2023)", "T6020/J414s", "1"),
     "m3": (["apple,j613", "apple,t8122", "apple,arm-platform"],
            "Apple MacBook Air (13-inch, M3, 2024)", "T8122/J613", "1"),
+    "m5": (["apple,j815", "apple,t8142", "apple,arm-platform"],
+           "Apple MacBook Air (15-inch, M5)", "T8142/J813, J815", "1"),
+    "m6": (["apple,j804", "apple,t8152", "apple,arm-platform"],
+           "Apple MacBook Pro (14-inch, M6)", "T8152/J804", "1"),
 }
 
 WRAPPED = b"\xa5" * 1500

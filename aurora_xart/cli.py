@@ -224,8 +224,16 @@ def print_status(s: st.State, out) -> None:
     _row(out, "Platform", f"{s.model or 'unknown model'}"
          + (f", {s.chip}" if s.chip else "") + f" ({compat})")
     if s.profile:
-        _row(out, "SEP profile", f"{s.profile.name}, {s.profile.bootstrap} boot, xART guard "
-             f"default {s.profile.guard_default}")
+        parts = [s.profile.name]
+        if s.profile.bootstrap:
+            parts.append(f"{s.profile.bootstrap} boot")
+        if s.profile.guard_default is not None:
+            parts.append(f"xART guard default {s.profile.guard_default}")
+        else:
+            parts.append("reported by driver")
+        _row(out, "SEP profile", ", ".join(parts))
+    elif s.driver_running:
+        _row(out, "SEP profile", "reported by driver")
     else:
         _row(out, "SEP profile", "none: the driver does not bind on this Mac")
     if s.driver_running:

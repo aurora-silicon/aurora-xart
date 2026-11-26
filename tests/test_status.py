@@ -325,6 +325,53 @@ class Configuration(Base):
         self.assertEqual(rc, 1)
         self.assertIn("not-apple-silicon", self.codes(data))
 
+    def test_running_driver_profile_overrides_unknown_static_table(self):
+        # A Mac whose SoC is not in platform.select() yet (e.g. M6/T8152):
+        # the running driver's diag/profile is authoritative, not "does not bind".
+        m = self.mac("m6")
+        m.committed()
+        m.guard_list(1)
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        self.assertEqual(data["verdict"], "ok")
+        self.assertEqual(data["platform"]["chip"], "M6")
+        self.assertEqual(data["platform"]["profile"], "T8152/J804")
+        self.assertIsNone(data["platform"]["guard_default"])
+        self.assertNotIn("no-profile", self.codes(data))
+        rc, out, _ = m.run("status")
+        self.assertEqual(rc, 0)
+        self.assertIn("T8152/J804, warm boot, reported by driver", out)
+        self.assertNotIn("does not bind", out)
+        self.assertIn("Nothing wrong found.", out)
+
+    def test_unlisted_soc_without_driver_reports_no_profile(self):
+        m = self.mac("m6", driver=False)
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        self.assertEqual(data["platform"]["chip"], "M6")
+        self.assertIsNone(data["platform"]["profile"])
+        finding = self.codes(data)["no-profile"]
+        self.assertIn("(M6)", finding["message"])
+        rc, out, _ = m.run("status")
+        self.assertIn("none: the driver does not bind on this Mac", out)
+
+    def test_m5_and_soc_level_selection_match_profile_rs(self):
+        m = self.mac("m5", driver=False)
+        rc, data = self.status(m)
+        self.assertEqual(rc, 0)
+        self.assertEqual(data["platform"]["chip"], "M5")
+        self.assertEqual(data["platform"]["profile"], "T8142/J813, J815")
+        self.assertEqual(data["platform"]["guard_default"], 1)
+        self.assertNotIn("no-profile", self.codes(data))
+        # Boards on a supported SoC need no board-specific gate.
+        m.write("/proc/device-tree/compatible", b"apple,j604\0apple,t8132\0apple,arm-platform\0")
+        _, data = self.status(m)
+        self.assertEqual(data["platform"]["profile"], "T8132/J713/J715")
+        m.write("/proc/device-tree/compatible", b"apple,j714s\0apple,t6050\0apple,arm-platform\0")
+        _, data = self.status(m)
+        self.assertEqual(data["platform"]["chip"], "M5 Pro/Max")
+        self.assertEqual(data["platform"]["profile"], "T6050/J714s, K116s, J716c")
+
 
 @unittest.skipIf(os.geteuid() == 0, "root reads everything")
 class WithoutRoot(Base):
